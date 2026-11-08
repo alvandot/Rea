@@ -54,6 +54,19 @@ Run on a simulator or device. If CloudKit is unavailable (no team, no
 entitlement) `AppModel` falls back to the JSON library store automatically, so
 the app still works.
 
+## CI
+
+Three workflows in `.github/workflows/`:
+
+| Workflow | Trigger | What it does |
+|---|---|---|
+| `pr-checks.yml` | every PR + push to `main` | `swift test` and an unsigned iPhone 13 Pro simulator build, in parallel; a `gate` job fails the PR unless both pass |
+| `build-ipa.yml` | push to `main`, manual | archives and exports an IPA (signed if secrets are set, otherwise a zipped `.app`) |
+| `testflight.yml` | manual only | `swift test` → `fastlane beta` → App Store Connect upload |
+
+`pr-checks.yml` is the floor: nothing reaches TestFlight unless the core tests
+and the SwiftUI compile both go green first.
+
 ## TestFlight (fastlane)
 
 `fastlane/Fastfile` has four lanes:
