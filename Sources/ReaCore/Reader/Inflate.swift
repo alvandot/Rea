@@ -1,4 +1,7 @@
 import Foundation
+#if canImport(zlib)
+import zlib
+#endif
 
 /// Raw-DEFLATE decompressor for ZIP entries. Wraps zlib when available and
 /// falls back to a stored-only path otherwise.

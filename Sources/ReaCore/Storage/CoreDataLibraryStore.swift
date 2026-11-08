@@ -146,7 +146,8 @@ public actor CoreDataLibraryStore: LibraryStore {
         try await perform { context in
             let request = NSFetchRequest<ProgressEntity>(entityName: "ProgressEntity")
             request.predicate = NSPredicate(format: "chapterID == %@", chapterID as CVarArg)
-            return try context.fetch(request).first.map(Self.toModel)
+            guard let entity = try context.fetch(request).first else { return nil }
+            return Self.toModel(entity)
         }
     }
 
