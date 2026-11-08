@@ -1,0 +1,201 @@
+name: Build IPA
+
+# Builds a signed-or-unsigned Rea.ipa on a macOS runner. Runs on every push to
+# main and on demand.
+#
+# Signing paths:
+#   * Secrets present (REA_CERT_P12_BASE64 + REA_PROVISIONING_PROFILE_BASE64 +
+#     REA_TEAM_ID) → archive with automatic signing and export a dev IPA.
+#   * Secrets absent → archive unsigned and ship the .app as a zipped artifact.
+#     That artifact installs on a simulator or can be re-signed later with
+#     `codesign`, but it will NOT install on a physical iPhone 13 Pro untouched.
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+    inputs:
+      configuration:
+        description: Build configuration
+        required: true
+        default: Release
+        type: choice
+        options: [Debug, Release]
+
+env:
+  SCHEME: Rea
+  BUNDLE_ID: app.rea.reader
+  PROJECT: Rea.xcodeproj
+  # iPhone 13 Pro is the simulator used for the test run.
+  SIM_DEVICE: iPhone 13 Pro
+  SIM_OS: latest
+
+jobs:
+  build:
+    runs-on: macos-15
+    timeout-minutes: 45
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Select Xcode
+        run: |
+          set -euo pipefail
+          ls /Applications | grep -i '^Xcode'
+          sudo xcode-select -s "$(ls -d /Applications/Xcode*.app | sort -V | tail -1)"
+          xcodebuild -version
+          xcode-select -p
+
+      - name: Install XcodeGen
+        run: |
+          set -euo pipefail
+          brew update >/dev/null
+          brew install xcodegen
+          xcodegen --version
+
+      - name: Cache SwiftPM
+        uses: actions/cache@v4
+        with:
+          path: .build
+          key: ${{ runner.os }}-swiftpm-${{ hashFiles('Package.swift') }}
+          restore-keys: ${{ runner.os }}-swiftpm-
+
+      - name: Run core tests
+        run: |
+          set -euo pipefail
+          swift test --parallel | tee swift-test.log
+
+      - name: Generate Xcode project
+        run: |
+          set -euo pipefail
+          TEAM_ID="${{ secrets.REA_TEAM_ID }}"
+          if [ -n "$TEAM_ID" ]; then
+            sed -i '' "s/DEVELOPMENT_TEAM: \"\"/DEVELOPMENT_TEAM: \"$TEAM_ID\"/" project.yml
+            echo "Injecting development team $TEAM_ID"
+          else
+            echo "No REA_TEAM_ID secret — building without a team (unsigned)."
+          fi
+          xcodegen generate
+          ls -la Rea.xcodeproj
+
+      - name: Import signing certificate and profile
+        id: signing
+        env:
+          CERT_P12: ${{ secrets.REA_CERT_P12_BASE64 }}
+          CERT_PASSWORD: ${{ secrets.REA_CERT_PASSWORD }}
+          PROFILE: ${{ secrets.REA_PROVISIONING_PROFILE_BASE64 }}
+          KEYCHAIN_PASSWORD: ${{ secrets.REA_KEYCHAIN_PASSWORD }}
+        run: |
+          set -euo pipefail
+          if [ -z "${CERT_P12:-}" ] || [ -z "${PROFILE:-}" ]; then
+            echo "signed=false" >> "$GITHUB_OUTPUT"
+            echo "Signing secrets not set — falling back to an unsigned build."
+            exit 0
+          fi
+
+          KEYCHAIN="$RUNNER_TEMP/rea-signing.keychain-db"
+          KEYCHAIN_PASS="${KEYCHAIN_PASSWORD:-rea-ci-keychain}"
+          security create-keychain -p "$KEYCHAIN_PASS" "$KEYCHAIN"
+          security set-keychain-settings -lut 21600 "$KEYCHAIN"
+          security unlock-keychain -p "$KEYCHAIN_PASS" "$KEYCHAIN"
+
+          echo "$CERT_P12" | base64 --decode > "$RUNNER_TEMP/cert.p12"
+          security import "$RUNNER_TEMP/cert.p12" -k "$KEYCHAIN" \
+            -P "${CERT_PASSWORD:-}" -T /usr/bin/codesign
+          security set-key-partition-list -S apple-tool:,apple: \
+            -k "$KEYCHAIN_PASS" "$KEYCHAIN" >/dev/null
+
+          security list-keychains -d user -s "$KEYCHAIN" $(security list-keychains -d user | tr -d '"')
+          security default-keychain -s "$KEYCHAIN"
+
+          mkdir -p ~/Library/MobileDevice/Provisioning\ Profiles
+          echo "$PROFILE" | base64 --decode \
+            > ~/Library/MobileDevice/Provisioning\ Profiles/rea.mobileprovision
+
+          echo "signed=true" >> "$GITHUB_OUTPUT"
+          echo "Imported signing identity."
+
+      - name: Render export options
+        if: steps.signing.outputs.signed == 'true'
+        run: |
+          set -euo pipefail
+          sed "s/\$(REA_TEAM_ID)/${{ secrets.REA_TEAM_ID }}/" \
+            Config/ExportOptions.plist > "$RUNNER_TEMP/export.plist"
+          python3 -c "import plistlib,sys; plistlib.load(open(sys.argv[1],'rb')); print('export.plist ok')" \
+            "$RUNNER_TEMP/export.plist"
+      - name: Archive (signed)
+        if: steps.signing.outputs.signed == 'true'
+        run: |
+          set -euo pipefail
+          xcodebuild archive \
+            -project "$PROJECT" \
+            -scheme "$SCHEME" \
+            -configuration "${{ github.event.inputs.configuration || 'Release' }}" \
+            -destination "generic/platform=iOS" \
+            -archivePath "$RUNNER_TEMP/Rea.xcarchive" \
+            -allowProvisioningUpdates \
+            CODE_SIGN_STYLE=Automatic \
+            DEVELOPMENT_TEAM="${{ secrets.REA_TEAM_ID }}" \
+            | tee archive.log
+
+      - name: Export IPA (signed)
+        if: steps.signing.outputs.signed == 'true'
+        run: |
+          set -euo pipefail
+          xcodebuild -exportArchive \
+            -archivePath "$RUNNER_TEMP/Rea.xcarchive" \
+            -exportPath "$RUNNER_TEMP/export" \
+            -exportOptionsPlist "$RUNNER_TEMP/export.plist" \
+            -allowProvisioningUpdates \
+            | tee export.log
+          ls -la "$RUNNER_TEMP/export"
+          cp "$RUNNER_TEMP/export/Rea.ipa" "$RUNNER_TEMP/Rea.ipa"
+
+      - name: Archive (unsigned)
+        if: steps.signing.outputs.signed != 'true'
+        run: |
+          set -euo pipefail
+          xcodebuild archive \
+            -project "$PROJECT" \
+            -scheme "$SCHEME" \
+            -configuration "${{ github.event.inputs.configuration || 'Release' }}" \
+            -destination "generic/platform=iOS" \
+            -archivePath "$RUNNER_TEMP/Rea.xcarchive" \
+            CODE_SIGN_IDENTITY=- \
+            CODE_SIGNING_REQUIRED=NO \
+            CODE_SIGNING_ALLOWED=NO \
+            | tee archive.log
+          APP="$RUNNER_TEMP/Rea.xcarchive/Products/Applications/Rea.app"
+          test -d "$APP" || { echo "::error::No .app produced in the archive"; exit 1; }
+          /usr/bin/ditto -c -k --sequesterRsrc --keepParent "$APP" "$RUNNER_TEMP/Rea-unsigned.zip"
+
+      - name: Upload signed IPA
+        if: steps.signing.outputs.signed == 'true'
+        uses: actions/upload-artifact@v4
+        with:
+          name: Rea-ipa-${{ github.run_number }}
+          path: ${{ runner.temp }}/Rea.ipa
+          if-no-files-found: error
+          retention-days: 14
+
+      - name: Upload unsigned app bundle
+        if: steps.signing.outputs.signed != 'true'
+        uses: actions/upload-artifact@v4
+        with:
+          name: Rea-unsigned-${{ github.run_number }}
+          path: ${{ runner.temp }}/Rea-unsigned.zip
+          if-no-files-found: error
+          retention-days: 14
+
+      - name: Upload logs on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: Rea-build-logs-${{ github.run_number }}
+          path: |
+            archive.log
+            export.log
+            swift-test.log
+          if-no-files-found: ignore
+          retention-days: 7

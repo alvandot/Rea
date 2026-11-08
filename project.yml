@@ -1,0 +1,84 @@
+name: Rea
+options:
+  bundleIdPrefix: app.rea
+  deploymentTarget:
+    iOS: "16.0"
+  createIntermediateGroups: true
+  generateEmptyDirectories: true
+
+settings:
+  base:
+    SWIFT_VERSION: "5.9"
+    DEVELOPMENT_TEAM: ""
+    CODE_SIGN_STYLE: Automatic
+    ENABLE_USER_SCRIPT_SANDBOXING: YES
+    SWIFT_STRICT_CONCURRENCY: minimal
+
+packages:
+  ReaCore:
+    path: .
+
+targets:
+  Rea:
+    type: application
+    platform: iOS
+    deploymentTarget: "16.0"
+    sources:
+      - path: App/Rea
+        excludes:
+          - "**/*.entitlements"
+      - path: Sources/ReaCore
+    info:
+      path: App/Rea/Info.plist
+    entitlements:
+      path: App/Rea/Rea.entitlements
+      properties:
+        com.apple.developer.icloud-container-identifiers:
+          - iCloud.app.rea.reader
+        com.apple.developer.icloud-services:
+          - CloudKit
+        com.apple.developer.ubiquity-kvstore-identifier: "$(TeamIdentifierPrefix)$(CFBundleIdentifier)"
+        aps-environment: development
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: app.rea.reader
+        INFOPLIST_FILE: App/Rea/Info.plist
+        CODE_SIGN_ENTITLEMENTS: App/Rea/Rea.entitlements
+        TARGETED_DEVICE_FAMILY: "1,2"
+        SUPPORTS_MACCATALYST: NO
+        MARKETING_VERSION: "1.0"
+        CURRENT_PROJECT_VERSION: "1"
+        ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
+        ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME: AccentColor
+        SWIFT_EMIT_LOC_STRINGS: YES
+        ENABLE_PREVIEWS: YES
+    dependencies:
+      - package: ReaCore
+        product: ReaCore
+
+  ReaCoreTests:
+    type: bundle.unit-test
+    platform: iOS
+    deploymentTarget: "16.0"
+    sources:
+      - path: Tests/ReaCoreTests
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: app.rea.reader.tests
+        GENERATE_INFOPLIST_FILE: YES
+    dependencies:
+      - package: ReaCore
+        product: ReaCore
+
+schemes:
+  Rea:
+    build:
+      targets:
+        Rea: all
+        ReaCoreTests: [test]
+    run:
+      config: Debug
+    test:
+      config: Debug
+      targets:
+        - ReaCoreTests

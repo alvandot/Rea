@@ -1,0 +1,8 @@
+{
+  "id": "sample-mangadex",
+  "name": "MangaDex (sample)",
+  "version": "1.0.0",
+  "language": "en",
+  "entry": "source.js",
+  "description": "Sample JS source over the public MangaDex API."
+}

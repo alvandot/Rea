@@ -1,0 +1,149 @@
+name: TestFlight
+
+# Archives Rea, exports for App Store Connect, and uploads to TestFlight via
+# the `beta` fastlane lane. Manual dispatch only — shipping a build should be a
+# decision, not a side effect of a push.
+#
+# Required repository secrets:
+#   REA_TEAM_ID                       Apple Developer team ID
+#   REA_ASC_KEY_ID                    App Store Connect API key ID
+#   REA_ASC_ISSUER_ID                 App Store Connect issuer ID
+#   REA_ASC_KEY_BASE64                contents of AuthKey_<KEY_ID>.p8, base64'd
+#   REA_CERT_P12_BASE64               distribution certificate .p12, base64'd
+#   REA_CERT_PASSWORD                 password for that .p12
+#   REA_PROVISIONING_PROFILE_BASE64   App Store provisioning profile, base64'd
+#
+# Optional:
+#   REA_KEYCHAIN_PASSWORD             temp keychain password (random if unset)
+#   REA_CHANGELOG                     TestFlight "What to Test" text
+#   REA_BUILD_NUMBER                  override the timestamp build number
+
+on:
+  workflow_dispatch:
+    inputs:
+      changelog:
+        description: TestFlight "What to Test" note
+        required: false
+        default: ""
+        type: string
+      upload:
+        description: Upload to TestFlight (uncheck to only build the IPA)
+        required: true
+        default: true
+        type: boolean
+
+concurrency:
+  group: testflight
+  cancel-in-progress: false
+
+env:
+  REA_TEAM_ID: ${{ secrets.REA_TEAM_ID }}
+  REA_ASC_KEY_ID: ${{ secrets.REA_ASC_KEY_ID }}
+  REA_ASC_ISSUER_ID: ${{ secrets.REA_ASC_ISSUER_ID }}
+  REA_CHANGELOG: ${{ inputs.changelog }}
+
+jobs:
+  testflight:
+    runs-on: macos-15
+    timeout-minutes: 60
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Select Xcode
+        run: |
+          set -euo pipefail
+          sudo xcode-select -s "$(ls -d /Applications/Xcode*.app | sort -V | tail -1)"
+          xcodebuild -version
+
+      - name: Install XcodeGen
+        run: |
+          set -euo pipefail
+          brew install xcodegen
+          xcodegen --version
+
+      - name: Set up Ruby and bundle
+        uses: ruby/setup-ruby@v1
+        with:
+          ruby-version: "3.2"
+          bundler-cache: true
+
+      - name: Write App Store Connect key
+        env:
+          KEY_BASE64: ${{ secrets.REA_ASC_KEY_BASE64 }}
+          KEY_ID: ${{ secrets.REA_ASC_KEY_ID }}
+        run: |
+          set -euo pipefail
+          if [ -z "${KEY_BASE64:-}" ]; then
+            echo "::error::REA_ASC_KEY_BASE64 is not set."
+            exit 1
+          fi
+          mkdir -p "$RUNNER_TEMP/keys"
+          KEY_PATH="$RUNNER_TEMP/keys/AuthKey_${KEY_ID}.p8"
+          echo "$KEY_BASE64" | base64 --decode > "$KEY_PATH"
+          chmod 600 "$KEY_PATH"
+          echo "REA_ASC_KEY_PATH=$KEY_PATH" >> "$GITHUB_ENV"
+
+      - name: Import signing certificate and profile
+        env:
+          CERT_P12: ${{ secrets.REA_CERT_P12_BASE64 }}
+          CERT_PASSWORD: ${{ secrets.REA_CERT_PASSWORD }}
+          PROFILE: ${{ secrets.REA_PROVISIONING_PROFILE_BASE64 }}
+          KEYCHAIN_PASSWORD: ${{ secrets.REA_KEYCHAIN_PASSWORD }}
+        run: |
+          set -euo pipefail
+          for required in CERT_P12 CERT_PASSWORD PROFILE; do
+            if [ -z "${!required:-}" ]; then
+              echo "::error::$required is not set. TestFlight uploads need a distribution identity."
+              exit 1
+            fi
+          done
+
+          KEYCHAIN="$RUNNER_TEMP/rea-dist.keychain-db"
+          KEYCHAIN_PASS="${KEYCHAIN_PASSWORD:-$(uuidgen)}"
+          security create-keychain -p "$KEYCHAIN_PASS" "$KEYCHAIN"
+          security set-keychain-settings -lut 21600 "$KEYCHAIN"
+          security unlock-keychain -p "$KEYCHAIN_PASS" "$KEYCHAIN"
+
+          echo "$CERT_P12" | base64 --decode > "$RUNNER_TEMP/dist.p12"
+          security import "$RUNNER_TEMP/dist.p12" -k "$KEYCHAIN" \
+            -P "$CERT_PASSWORD" -T /usr/bin/codesign -T /usr/bin/security
+          security set-key-partition-list -S apple-tool:,apple:,codesign: \
+            -k "$KEYCHAIN_PASS" "$KEYCHAIN" >/dev/null
+          security list-keychains -d user -s "$KEYCHAIN" $(security list-keychains -d user | tr -d '"')
+          security default-keychain -s "$KEYCHAIN"
+
+          mkdir -p ~/Library/MobileDevice/Provisioning\ Profiles
+          echo "$PROFILE" | base64 --decode \
+            > ~/Library/MobileDevice/Provisioning\ Profiles/rea-appstore.mobileprovision
+
+          echo "Signing identity and profile imported."
+
+      - name: Core tests
+        run: swift test --parallel
+
+      - name: Build and upload
+        run: |
+          set -euo pipefail
+          if [ "${{ inputs.upload }}" = "true" ]; then
+            bundle exec fastlane beta
+          else
+            bundle exec fastlane beta skip_upload:true
+          fi
+
+      - name: Upload IPA artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: Rea-testflight-${{ github.run_number }}
+          path: build/Rea.ipa
+          if-no-files-found: error
+          retention-days: 14
+
+      - name: Clean up keychain
+        if: always()
+        run: |
+          KEYCHAIN="$RUNNER_TEMP/rea-dist.keychain-db"
+          if [ -f "$KEYCHAIN" ]; then
+            security delete-keychain "$KEYCHAIN" || true
+          fi

@@ -1,0 +1,40 @@
+# macOS
+.DS_Store
+
+# Swift / SwiftPM
+.build/
+.swiftpm/
+*.xcodeproj/
+*.xcworkspace/
+DerivedData/
+Packages/
+*.resolved
+
+# XcodeGen output
+Rea.xcodeproj
+
+# Generated icons are committed; regenerate with Tools/make_app_icons.py
+
+# Build artifacts
+*.ipa
+*.dSYM
+*.xcarchive
+build/
+vendor/
+
+# Fastlane
+fastlane/report.xml
+fastlane/Preview.html
+fastlane/screenshots/**/*.png
+fastlane/test_output
+fastlane/README.md
+
+# Ruby
+.bundle/
+Gemfile.lock
+
+# User-specific
+xcuserdata/
+*.xcuserstate
+.idea/
+.vscode/

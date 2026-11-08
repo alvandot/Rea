@@ -1,0 +1,14 @@
+# Fastlane configuration for Rea.
+#
+# Nothing here is a secret: every credential is read from the environment so CI
+# (or your shell) supplies it. See `fastlane/Fastfile` for the lanes.
+
+app_identifier("app.rea.reader")
+
+apple_id(ENV["REA_APPLE_ID"]) if ENV["REA_APPLE_ID"]
+team_id(ENV["REA_TEAM_ID"]) if ENV["REA_TEAM_ID"]
+itc_team_id(ENV["REA_ITC_TEAM_ID"]) if ENV["REA_ITC_TEAM_ID"]
+
+# The Xcode project is generated from project.yml, so every lane runs
+# `xcodegen generate` itself. Run `bundle exec fastlane <lane>` from the repo root.
+for_platform :ios

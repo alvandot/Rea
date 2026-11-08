@@ -1,0 +1,190 @@
+# Fastlane lanes for Rea.
+#
+#   fastlane test               # swift test + simulator smoke on iPhone 13 Pro
+#   fastlane ipa                # development-signed .ipa
+#   fastlane beta               # archive + export for App Store Connect + upload
+#   fastlane beta skip_upload:true   # archive + export, leave the .ipa behind
+#
+# Signing uses an App Store Connect API key (not `match`), so no git-stored
+# certificates are involved. Required environment:
+#
+#   REA_TEAM_ID                 Apple Developer team ID
+#   REA_ASC_KEY_ID              App Store Connect API key ID
+#   REA_ASC_ISSUER_ID           App Store Connect issuer ID
+#   REA_ASC_KEY_PATH            path to the .p8 key file (CI writes it to $RUNNER_TEMP)
+#   REA_CERT_P12_BASE64         base64 signing certificate (CI imports it)
+#   REA_CERT_PASSWORD           password for that .p12
+#   REA_PROVISIONING_PROFILE_BASE64  base64 App Store provisioning profile
+#
+# The certificate and profile are installed by CI before fastlane runs (or by
+# Xcode's automatic signing locally); fastlane only needs the API key to talk to
+# App Store Connect.
+#
+# Optional:
+#   REA_APPLE_ID, REA_ITC_TEAM_ID
+#   REA_BUILD_NUMBER            overrides the default timestamp build number
+#   REA_CHANGELOG               TestFlight "What to Test" text
+
+require "json"
+
+SCHEME = "Rea".freeze
+PROJECT = "Rea.xcodeproj".freeze
+BUNDLE_ID = "app.rea.reader".freeze
+SIMULATOR = "iPhone 13 Pro".freeze
+BUILD_DIR = File.expand_path("./build", __dir__)
+
+def require_env!(*names)
+  missing = names.select { |name| ENV[name].nil? || ENV[name].empty? }
+  unless missing.empty?
+    UI.user_error!("Missing environment variables: #{missing.join(', ')}")
+  end
+end
+
+def build_number
+  ENV["REA_BUILD_NUMBER"] || Time.now.utc.strftime("%Y%m%d%H%M")
+end
+
+def generate_project!
+  # The Xcode project is a build product, never committed.
+  sh("xcodegen", "generate")
+  UI.success("Generated #{PROJECT}")
+end
+
+def apply_team!
+  return unless ENV["REA_TEAM_ID"]
+  # project.yml ships with an empty DEVELOPMENT_TEAM so it stays usable as-is;
+  # substitute the real value for this build only.
+  path = "project.yml"
+  content = File.read(path)
+  patched = content.sub(/DEVELOPMENT_TEAM: ""/, %(DEVELOPMENT_TEAM: "#{ENV['REA_TEAM_ID']}"))
+  if patched == content && !content.include?(ENV["REA_TEAM_ID"])
+    UI.important("DEVELOPMENT_TEAM already set in project.yml; leaving it alone.")
+  else
+    File.write(path, patched)
+  end
+end
+
+def app_store_connect_key
+  require_env!("REA_ASC_KEY_ID", "REA_ASC_ISSUER_ID", "REA_ASC_KEY_PATH")
+  app_store_connect_api_key(
+    key_id: ENV["REA_ASC_KEY_ID"],
+    issuer_id: ENV["REA_ASC_ISSUER_ID"],
+    key_filepath: ENV["REA_ASC_KEY_PATH"],
+    duration: 1200,
+    in_house: false
+  )
+end
+
+default_platform(:ios)
+
+platform :ios do
+  desc "Run the core SwiftPM tests and a simulator build on iPhone 13 Pro"
+  lane :test do
+    sh("swift", "test", "--parallel")
+
+    apply_team!
+    generate_project!
+
+    sh(
+      "xcodebuild",
+      "-project", PROJECT,
+      "-scheme", SCHEME,
+      "-configuration", "Debug",
+      "-destination", "platform=iOS Simulator,name=#{SIMULATOR}",
+      "build",
+      "-quiet"
+    )
+    UI.success("Core tests passed and #{SIMULATOR} build succeeded.")
+  end
+
+  desc "Build a development-signed IPA"
+  lane :ipa do
+    require_env!("REA_TEAM_ID")
+    apply_team!
+    generate_project!
+    FileUtils.mkdir_p(BUILD_DIR)
+
+    build_app(
+      project: PROJECT,
+      scheme: SCHEME,
+      configuration: "Release",
+      export_method: "development",
+      output_directory: BUILD_DIR,
+      output_name: "Rea.ipa",
+      include_bitcode: false,
+      export_options: {
+        method: "development",
+        signingStyle: "automatic",
+        teamID: ENV["REA_TEAM_ID"],
+        thinning: "<none>",
+        stripSwiftSymbols: true,
+        compileBitcode: false
+      }
+    )
+
+    UI.success("IPA at #{File.join(BUILD_DIR, 'Rea.ipa')}")
+  end
+
+  desc "Archive, export for App Store Connect, and upload to TestFlight"
+  lane :beta do |options|
+    require_env!("REA_TEAM_ID")
+    apply_team!
+    generate_project!
+    FileUtils.mkdir_p(BUILD_DIR)
+
+    number = build_number
+    UI.message("Using build number #{number}")
+    increment_build_number(
+      build_number: number,
+      xcodeproj: PROJECT
+    )
+
+    build_app(
+      project: PROJECT,
+      scheme: SCHEME,
+      configuration: "Release",
+      export_method: "app-store-connect",
+      output_directory: BUILD_DIR,
+      output_name: "Rea.ipa",
+      include_bitcode: false,
+      export_options: {
+        method: "app-store-connect",
+        signingStyle: "automatic",
+        teamID: ENV["REA_TEAM_ID"],
+        thinning: "<none>",
+        stripSwiftSymbols: true,
+        compileBitcode: false,
+        uploadSymbols: true
+      }
+    )
+
+    unless options[:skip_upload]
+      upload_to_testflight(
+        api_key: app_store_connect_key,
+        ipa: File.join(BUILD_DIR, "Rea.ipa"),
+        skip_waiting_for_build_processing: true,
+        changelog: ENV["REA_CHANGELOG"] || "Automated TestFlight build #{number}.",
+        distribute_external: false,
+        notify_external_testers: false
+      )
+      UI.success("Uploaded build #{number} to TestFlight.")
+    else
+      UI.important("skip_upload set — leaving #{File.join(BUILD_DIR, 'Rea.ipa')} in place.")
+    end
+  end
+
+  desc "Upload an already-exported IPA without rebuilding"
+  lane :upload do |options|
+    ipa_path = options[:ipa] || File.join(BUILD_DIR, "Rea.ipa")
+    UI.user_error!("No IPA at #{ipa_path}") unless File.exist?(ipa_path)
+
+    upload_to_testflight(
+      api_key: app_store_connect_key,
+      ipa: ipa_path,
+      skip_waiting_for_build_processing: true,
+      changelog: ENV["REA_CHANGELOG"] || "Automated TestFlight build.",
+      distribute_external: false,
+      notify_external_testers: false
+    )
+  end
+end
