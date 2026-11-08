@@ -102,7 +102,7 @@ public final class JSEngine: @unchecked Sendable {
                 }
                 // Unwrap promise-like values is left to the script: the contract
                 // is synchronous for pages/series and promise-based for fetch.
-                continuation.resume(returning: result.toObject())
+                continuation.resume(returning: Self.bridge(result))
             }
         }
     }
@@ -118,7 +118,7 @@ public final class JSEngine: @unchecked Sendable {
     }
 
     private func makeFetchPromise(_ urlString: String) -> JSValue {
-        guard let context = JSContext.current() else { return JSValue(undefinedIn: nil) }
+        let context = self.context
         guard let url = URL(string: urlString) else {
             return JSValue(undefinedIn: context)
         }
@@ -126,26 +126,57 @@ public final class JSEngine: @unchecked Sendable {
             return JSValue(undefinedIn: context)
         }
 
-        let promise = JSValue(newPromiseIn: context)
-        guard let promise else { return JSValue(undefinedIn: context) }
-        let resolve = promise.objectForKeyedSubscript("resolve")
-        let reject = promise.objectForKeyedSubscript("reject")
+        // The executor runs synchronously, so the resolve/reject pairs have to
+        // leave the block with the request task already in flight.
+        var resolveRef: JSValue?
+        var rejectRef: JSValue?
+        let promise = JSValue(
+            newPromiseIn: context,
+            fromExecutor: { resolve, reject in
+                resolveRef = resolve
+                rejectRef = reject
+            }
+        )
+        guard let promise, let resolve = resolveRef, let reject = rejectRef else {
+            return JSValue(undefinedIn: context)
+        }
 
         var request = URLRequest(url: url)
         request.timeoutInterval = timeout
-        session.dataTask(with: request) { data, response, _ in
+        session.dataTask(with: request) { data, response, error in
             self.queue.async {
                 guard let data,
                       let text = String(data: data, encoding: .utf8) else {
-                    reject?.call(withArguments: ["fetch failed"])
+                    let reason = error?.localizedDescription ?? "fetch failed"
+                    reject.call(withArguments: [reason])
                     return
                 }
                 let status = (response as? HTTPURLResponse)?.statusCode ?? 0
                 let payload: [String: Any] = ["status": status, "body": text]
-                resolve?.call(withArguments: [payload])
+                resolve.call(withArguments: [payload])
             }
         }.resume()
         return promise
+    }
+
+    /// Converts a `JSValue` into something `Any`-compatible for the Swift side.
+    /// `toObject()` is only valid on objects, so primitives go through the
+    /// typed accessors instead.
+    private static func bridge(_ value: JSValue) -> Any? {
+        if value.isString {
+            return value.toString()
+        }
+        if value.isBoolean {
+            return value.toBool()
+        }
+        if value.isNumber {
+            let number = value.toDouble()
+            return number == number.rounded() ? value.toInt32() : number
+        }
+        if value.isNull || value.isUndefined {
+            return nil
+        }
+        return value.toObject()
     }
 }
 #endif
