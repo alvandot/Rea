@@ -113,24 +113,51 @@ public actor MangaDexSource: ContentSource {
     }
 
     private func mapSeries(_ manga: MangaDexMangaDTO) -> Series {
-        let title = manga.attributes.title["en"]
-            ?? manga.attributes.title.values.first
-            ?? "Untitled"
+        let attrs = manga.attributes
+        let title = attrs.title["en"] ?? attrs.title.values.first ?? "Untitled"
         let cover = manga.relationships
             .first(where: { $0.type == "cover_art" })?
             .attributes?.fileName
-            .flatMap { URL(string: "https://uploads.mangadex.org/covers/\(manga.id)/\($0)") }
+            .flatMap { URL(string: "https://uploads.mangadex.org/covers/\(manga.id)/\($0).256.jpg") }
+        let author = manga.relationships
+            .first(where: { $0.type == "author" })?
+            .attributes?.name
+        let artist = manga.relationships
+            .first(where: { $0.type == "artist" })?
+            .attributes?.name
+        let categories = attrs.tags.compactMap { $0.attributes.name["en"] ?? $0.attributes.name.values.first }
         return Series(
             id: StableID.uuid(sourceID: id, remoteID: manga.id),
             sourceID: id,
             remoteID: manga.id,
             title: title,
-            author: manga.attributes.authorName,
-            artist: manga.attributes.artistName,
-            summary: manga.attributes.description["en"],
+            author: author,
+            artist: artist,
+            summary: attrs.description["en"] ?? attrs.description.values.first,
             coverURL: cover,
-            lastUpdated: manga.attributes.updatedAt
+            status: Self.readingStatus(from: attrs.status),
+            rating: Self.contentRating(from: attrs.contentRating),
+            categories: categories
         )
+    }
+
+    private static func readingStatus(from raw: String?) -> ReadingStatus {
+        switch raw {
+        case "ongoing": return .reading
+        case "completed": return .completed
+        case "hiatus": return .onHold
+        case "cancelled": return .dropped
+        default: return .planToRead
+        }
+    }
+
+    private static func contentRating(from raw: String?) -> ContentRating {
+        switch raw {
+        case "erotica": return .erotica
+        case "pornographic": return .pornographic
+        case "suggestive": return .suggestive
+        default: return .safe
+        }
     }
 
     private func mapChapter(_ chapter: MangaDexChapterDTO, seriesRemoteID: String) -> Chapter? {
@@ -151,18 +178,32 @@ public actor MangaDexSource: ContentSource {
 
 struct MangaEnvelope: Decodable {
     let data: MangaDexMangaDTO?
-    let total: Int?
+
     init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
         data = try c.decodeIfPresent(MangaDexMangaDTO.self, forKey: .data)
-        total = try? c.decode(Int.self, forKey: .total)
     }
-    enum CodingKeys: String, CodingKey { case data, total }
+
+    enum CodingKeys: String, CodingKey { case data }
 }
 
 struct MangaListEnvelope: Decodable {
     let data: [MangaDexMangaDTO]
     let total: Int
+
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        data = try c.decodeIfPresent([MangaDexMangaDTO].self, forKey: .data) ?? []
+        // The list endpoint reports `total` one level up, in `Meta`.
+        let meta = try? c.decodeIfPresent(Meta.self, forKey: .meta)
+        total = meta?.total ?? data.count
+    }
+
+    enum CodingKeys: String, CodingKey { case data, meta }
+
+    struct Meta: Decodable {
+        let total: Int?
+    }
 }
 
 struct MangaDexMangaDTO: Decodable {
@@ -173,30 +214,51 @@ struct MangaDexMangaDTO: Decodable {
     struct Attributes: Decodable {
         let title: [String: String]
         let description: [String: String]
-        let authorName: String?
-        let artistName: String?
-        let updatedAt: Date?
+        let status: String?
+        let year: Int?
+        let contentRating: String?
+        let tags: [Tag]
 
         enum CodingKeys: String, CodingKey {
-            case title, description, updatedAt
-            case authorName = "authorName"
-            case artistName = "artistName"
+            case title, description, status, year, contentRating, tags
         }
 
         init(from decoder: Decoder) throws {
             let c = try decoder.container(keyedBy: CodingKeys.self)
             title = (try? c.decode([String: String].self, forKey: .title)) ?? [:]
             description = (try? c.decode([String: String].self, forKey: .description)) ?? [:]
-            authorName = try? c.decodeIfPresent(String.self, forKey: .authorName)
-            artistName = try? c.decodeIfPresent(String.self, forKey: .artistName)
-            updatedAt = try? c.decodeIfPresent(Date.self, forKey: .updatedAt)
+            status = try? c.decodeIfPresent(String.self, forKey: .status)
+            year = try? c.decodeIfPresent(Int.self, forKey: .year)
+            contentRating = try? c.decodeIfPresent(String.self, forKey: .contentRating)
+            tags = (try? c.decodeIfPresent([Tag].self, forKey: .tags)) ?? []
+        }
+
+        struct Tag: Decodable {
+            let attributes: Attributes
+            struct Attributes: Decodable {
+                let name: [String: String]
+            }
         }
     }
 
     struct Relationship: Decodable {
         let type: String
         let attributes: Attributes?
-        struct Attributes: Decodable { let fileName: String? }
+
+        struct Attributes: Decodable {
+            /// `cover_art` rows carry `fileName`.
+            let fileName: String?
+            /// `author` / `artist` rows carry `name`.
+            let name: String?
+
+            init(from decoder: Decoder) throws {
+                let c = try decoder.container(keyedBy: CodingKeys.self)
+                fileName = try? c.decodeIfPresent(String.self, forKey: .fileName)
+                name = try? c.decodeIfPresent(String.self, forKey: .name)
+            }
+
+            enum CodingKeys: String, CodingKey { case fileName, name }
+        }
     }
 }
 
