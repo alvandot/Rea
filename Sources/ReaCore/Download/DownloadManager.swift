@@ -141,6 +141,9 @@ public actor DownloadManager {
 
     public func cancel(chapterID: UUID) {
         guard let record = records.values.first(where: { $0.chapterID == chapterID }) else { return }
+        // Only an in-flight download can be cancelled; a finished record stays
+        // completed so the library keeps a valid cache entry.
+        guard record.state == .queued || record.state == .downloading else { return }
         var cancelled = record
         cancelled.state = .cancelled
         records[record.id] = cancelled

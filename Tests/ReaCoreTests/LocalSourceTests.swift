@@ -22,7 +22,11 @@ final class LocalSourceTests: XCTestCase {
     }
 
     func testListsAdoptedFiles() async throws {
-        let source = root.appendingPathComponent("Series One.cbz")
+        // The source must live outside the managed root: adopting a file that
+        // is already in the store collides with itself and gets a "-1" suffix.
+        let staging = root.appendingPathComponent("incoming", isDirectory: true)
+        try FileManager.default.createDirectory(at: staging, withIntermediateDirectories: true)
+        let source = staging.appendingPathComponent("Series One.cbz")
         try Data([0x50, 0x4B, 0x03, 0x04]).write(to: source)
 
         let name = try files.adopt(source)

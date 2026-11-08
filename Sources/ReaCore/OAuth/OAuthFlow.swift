@@ -167,8 +167,13 @@ public struct OAuthConfiguration: Sendable {
             "code_verifier": pkce.verifier,
             "redirect_uri": redirectURI
         ]
+        // RFC 3986 unreserved set (`-._~` included) — `.alphanumerics` alone
+        // would percent-encode the `-` and `_` that base64url verifiers are
+        // full of, producing a body that no longer matches the challenge.
+        var unreserved = CharacterSet.alphanumerics
+        unreserved.insert(charactersIn: "-._~")
         request.httpBody = form
-            .map { "\($0.key)=\($0.value.addingPercentEncoding(withAllowedCharacters: .alphanumerics) ?? $0.value)" }
+            .map { "\($0.key)=\($0.value.addingPercentEncoding(withAllowedCharacters: unreserved) ?? $0.value)" }
             .joined(separator: "&")
             .data(using: .utf8)
         return request

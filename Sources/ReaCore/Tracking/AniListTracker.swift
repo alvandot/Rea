@@ -90,7 +90,9 @@ public struct AniListTracker: TrackerService {
             "status": Self.anilistStatus(status ?? .reading)
         ])
         let envelope = try JSONDecoder().decode(SaveEnvelope.self, from: data)
-        let entry = envelope.data.saveMediaListEntry
+        guard let entry = envelope.data.saveMediaListEntry else {
+            throw TrackerError.parse("SaveMediaListEntry returned null")
+        }
         return TrackerEntry(
             id: String(entry.mediaId),
             remoteID: String(entry.mediaId),
@@ -185,13 +187,53 @@ public struct AniListTracker: TrackerService {
         }
     }
 
+    /// The GraphQL response field is named after the mutation itself —
+    /// `SaveMediaListEntry`, capitalised — and is nullable in the schema
+    /// (AniList returns null when the mutation is rejected).
     private struct SaveEnvelope: Decodable {
         let data: Data
-        struct Data: Decodable { let saveMediaListEntry: Entry }
+
+        struct Data: Decodable {
+            let saveMediaListEntry: Entry?
+
+            init(from decoder: Decoder) throws {
+                let c = try decoder.container(keyedBy: DataCodingKeys.self)
+                // AniList names the response field after the mutation.
+                saveMediaListEntry = try c.decodeIfPresent(
+                    Entry.self,
+                    forKey: DataCodingKeys(stringValue: "SaveMediaListEntry")!
+                )
+            }
+        }
+
         struct Entry: Decodable {
             let mediaId: Int
             let progress: Int?
             let status: String
+
+            init(from decoder: Decoder) throws {
+                let c = try decoder.container(keyedBy: CodingKeys.self)
+                mediaId = try c.decode(Int.self, forKey: .mediaId)
+                progress = try c.decodeIfPresent(Int.self, forKey: .progress)
+                status = try c.decodeIfPresent(String.self, forKey: .status) ?? "CURRENT"
+            }
+
+            enum CodingKeys: String, CodingKey {
+                case mediaId, progress, status
+            }
+        }
+
+        /// `Entry` uses its own key space; `Data` maps the capitalised field.
+        struct DataCodingKeys: CodingKey {
+            var stringValue: String
+            var intValue: Int?
+
+            init?(stringValue: String) {
+                self.stringValue = stringValue
+                self.intValue = nil
+            }
+
+            init?(intValue: Int) { return nil }
         }
     }
 }

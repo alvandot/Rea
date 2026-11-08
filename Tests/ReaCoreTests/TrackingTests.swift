@@ -86,6 +86,8 @@ final class TrackingTests: XCTestCase {
     }
 
     func testAniListUpdateSendsGraphQL() async throws {
+        // Mirrors AniList exactly: the mutation response field is capitalised
+        // `SaveMediaListEntry`, which is why a lowercase CodingKey failed.
         let payload = Data(#"{"data":{"SaveMediaListEntry":{"mediaId":9,"progress":4,"status":"CURRENT"}}}"#.utf8)
         let recorder = Recorder()
         let transport = RecordingTransport(payload: payload, status: 200, recorder: recorder)

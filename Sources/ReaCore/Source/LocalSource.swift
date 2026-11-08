@@ -78,6 +78,7 @@ public struct LocalSource: ContentSource {
             options: [.skipsHiddenFiles]
         )) ?? []
         return contents
+            // `pages/` is the download cache, not a series.
             .filter { $0.lastPathComponent != "pages" }
             .map { url in
                 Series(
