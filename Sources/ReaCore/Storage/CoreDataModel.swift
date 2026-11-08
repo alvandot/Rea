@@ -10,19 +10,19 @@ public enum CoreDataModel {
         let series = entity(
             name: "SeriesEntity",
             attributes: [
-                .init(name: "id", type: .UUIDAttributeType, optional: false),
-                .init(name: "sourceID", type: .stringAttributeType, optional: false),
-                .init(name: "remoteID", type: .stringAttributeType, optional: false),
-                .init(name: "title", type: .stringAttributeType, optional: false),
-                .init(name: "author", type: .stringAttributeType, optional: true),
-                .init(name: "artist", type: .stringAttributeType, optional: true),
-                .init(name: "summary", type: .stringAttributeType, optional: true),
-                .init(name: "coverURL", type: .stringAttributeType, optional: true),
-                .init(name: "status", type: .stringAttributeType, optional: false),
-                .init(name: "rating", type: .stringAttributeType, optional: false),
-                .init(name: "categories", type: .binaryDataAttributeType, optional: true),
-                .init(name: "lastUpdated", type: .dateAttributeType, optional: true),
-                .init(name: "isFavorite", type: .booleanAttributeType, optional: false)
+                .init(name: "id", type: NSAttributeType.UUIDAttributeType, optional: false),
+                .init(name: "sourceID", type: NSAttributeType.stringAttributeType, optional: false),
+                .init(name: "remoteID", type: NSAttributeType.stringAttributeType, optional: false),
+                .init(name: "title", type: NSAttributeType.stringAttributeType, optional: false),
+                .init(name: "author", type: NSAttributeType.stringAttributeType, optional: true),
+                .init(name: "artist", type: NSAttributeType.stringAttributeType, optional: true),
+                .init(name: "summary", type: NSAttributeType.stringAttributeType, optional: true),
+                .init(name: "coverURL", type: NSAttributeType.stringAttributeType, optional: true),
+                .init(name: "status", type: NSAttributeType.stringAttributeType, optional: false),
+                .init(name: "rating", type: NSAttributeType.stringAttributeType, optional: false),
+                .init(name: "categories", type: NSAttributeType.binaryDataAttributeType, optional: true),
+                .init(name: "lastUpdated", type: NSAttributeType.dateAttributeType, optional: true),
+                .init(name: "isFavorite", type: NSAttributeType.booleanAttributeType, optional: false)
             ],
             className: "SeriesEntity"
         )
@@ -30,16 +30,16 @@ public enum CoreDataModel {
         let chapter = entity(
             name: "ChapterEntity",
             attributes: [
-                .init(name: "id", type: .UUIDAttributeType, optional: false),
-                .init(name: "seriesID", type: .UUIDAttributeType, optional: false),
-                .init(name: "sourceID", type: .stringAttributeType, optional: false),
-                .init(name: "remoteID", type: .stringAttributeType, optional: false),
-                .init(name: "name", type: .stringAttributeType, optional: false),
-                .init(name: "number", type: .doubleAttributeType, optional: false),
-                .init(name: "uploadedAt", type: .dateAttributeType, optional: true),
-                .init(name: "pageCount", type: .integer32AttributeType, optional: true),
-                .init(name: "isRead", type: .booleanAttributeType, optional: false),
-                .init(name: "isBookmarked", type: .booleanAttributeType, optional: false)
+                .init(name: "id", type: NSAttributeType.UUIDAttributeType, optional: false),
+                .init(name: "seriesID", type: NSAttributeType.UUIDAttributeType, optional: false),
+                .init(name: "sourceID", type: NSAttributeType.stringAttributeType, optional: false),
+                .init(name: "remoteID", type: NSAttributeType.stringAttributeType, optional: false),
+                .init(name: "name", type: NSAttributeType.stringAttributeType, optional: false),
+                .init(name: "number", type: NSAttributeType.doubleAttributeType, optional: false),
+                .init(name: "uploadedAt", type: NSAttributeType.dateAttributeType, optional: true),
+                .init(name: "pageCount", type: NSAttributeType.integer32AttributeType, optional: true),
+                .init(name: "isRead", type: NSAttributeType.booleanAttributeType, optional: false),
+                .init(name: "isBookmarked", type: NSAttributeType.booleanAttributeType, optional: false)
             ],
             className: "ChapterEntity"
         )
@@ -47,10 +47,10 @@ public enum CoreDataModel {
         let progress = entity(
             name: "ProgressEntity",
             attributes: [
-                .init(name: "chapterID", type: .UUIDAttributeType, optional: false),
-                .init(name: "page", type: .integer32AttributeType, optional: false),
-                .init(name: "scrollOffset", type: .doubleAttributeType, optional: false),
-                .init(name: "updatedAt", type: .dateAttributeType, optional: false)
+                .init(name: "chapterID", type: NSAttributeType.UUIDAttributeType, optional: false),
+                .init(name: "page", type: NSAttributeType.integer32AttributeType, optional: false),
+                .init(name: "scrollOffset", type: NSAttributeType.doubleAttributeType, optional: false),
+                .init(name: "updatedAt", type: NSAttributeType.dateAttributeType, optional: false)
             ],
             className: "ProgressEntity"
         )
@@ -59,15 +59,36 @@ public enum CoreDataModel {
         return model
     }
 
+    /// Attribute spec used by `entity(...)`. Type is `NSAttributeType` rather
+    /// than an inference-through-`init` chain because Swift cannot resolve
+    /// leading-dot members of a nested enum through a synthesized initializer.
+    public struct Attribute {
+        let name: String
+        let type: NSAttributeType
+        let optional: Bool
+
+        init(name: String, type: NSAttributeType, optional: Bool) {
+            self.name = name
+            self.type = type
+            self.optional = optional
+        }
+    }
+
     private static func entity(
         name: String,
-        attributes: [NSAttributeDescription],
+        attributes: [Attribute],
         className: String
     ) -> NSEntityDescription {
         let entity = NSEntityDescription()
         entity.name = name
         entity.managedObjectClassName = className
-        entity.properties = attributes
+        entity.properties = attributes.map { spec in
+            let attribute = NSAttributeDescription()
+            attribute.name = spec.name
+            attribute.attributeType = spec.type
+            attribute.isOptional = spec.optional
+            return attribute
+        }
         return entity
     }
 }

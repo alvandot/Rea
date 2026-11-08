@@ -16,21 +16,23 @@ public actor CoreDataLibraryStore: LibraryStore {
 
     public init(configuration: Configuration = .local) throws {
         let model = CoreDataModel.make()
+        let resolved: NSPersistentContainer
         switch configuration {
         case .preview:
-            let container = NSPersistentContainer(name: "ReaPreview", managedObjectModel: model)
+            let previewContainer = NSPersistentContainer(name: "ReaPreview", managedObjectModel: model)
             let description = NSPersistentStoreDescription()
             description.type = NSInMemoryStoreType
-            container.persistentStoreDescriptions = [description]
-            self.container = container
+            previewContainer.persistentStoreDescriptions = [description]
+            resolved = previewContainer
         case .local:
-            self.container = NSPersistentContainer(name: "Rea", managedObjectModel: model)
+            resolved = NSPersistentContainer(name: "Rea", managedObjectModel: model)
         case .cloudKit:
-            self.container = NSPersistentCloudKitContainer(name: "Rea", managedObjectModel: model)
+            resolved = NSPersistentCloudKitContainer(name: "Rea", managedObjectModel: model)
         }
+        container = resolved
 
         if configuration != .preview {
-            for description in container.persistentStoreDescriptions {
+            for description in resolved.persistentStoreDescriptions {
                 description.shouldMigrateStoreAutomatically = true
                 description.shouldInferMappingModelAutomatically = true
                 description.setOption(true as NSNumber, forKey: NSPersistentHistoryTrackingKey)
@@ -38,17 +40,17 @@ public actor CoreDataLibraryStore: LibraryStore {
             }
         }
 
-        var loadError: Error?
+        let loadResult = LoadResult()
         let semaphore = DispatchSemaphore(value: 0)
-        container.loadPersistentStores { _, error in
-            loadError = error
+        resolved.loadPersistentStores { _, error in
+            loadResult.error = error
             semaphore.signal()
         }
         semaphore.wait()
-        if let loadError { throw loadError }
+        if let loadError = loadResult.error { throw loadError }
 
-        container.viewContext.automaticallyMergesChangesFromParent = true
-        container.viewContext.mergePolicy = NSMergeByPropertyObjectTrumpMergePolicy
+        resolved.viewContext.automaticallyMergesChangesFromParent = true
+        resolved.viewContext.mergePolicy = NSMergeByPropertyObjectTrumpMergePolicy
     }
 
     // MARK: - Series
@@ -173,8 +175,10 @@ public actor CoreDataLibraryStore: LibraryStore {
         context.mergePolicy = NSMergeByPropertyObjectTrumpMergePolicy
         return try await withCheckedThrowingContinuation { continuation in
             context.perform {
-                do { continuation.resume(returning: try work(context)) }
-                catch { continuation.resume(throwing: error) }
+                let result: Result<T, Error>
+                do { result = .success(try work(context)) }
+                catch { result = .failure(error) }
+                continuation.resume(with: result)
             }
         }
     }
@@ -270,5 +274,11 @@ public actor CoreDataLibraryStore: LibraryStore {
             updatedAt: entity.updatedAt ?? .distantPast
         )
     }
+}
+
+/// Carries the persistent-store load result out of the escaping `loadPersistentStores`
+/// completion without tripping concurrency diagnostics.
+private final class LoadResult: @unchecked Sendable {
+    var error: Error?
 }
 #endif
