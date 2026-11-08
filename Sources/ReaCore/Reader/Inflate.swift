@@ -1,29 +1,84 @@
 import Foundation
+#if canImport(Compression)
+import Compression
+#elseif canImport(zlib)
+import zlib
+#endif
 
-/// Raw-DEFLATE decompressor for ZIP entries. Wraps zlib when available and
-/// falls back to a stored-only path otherwise.
+/// Raw-DEFLATE decompressor for ZIP entries.
+///
+/// `zlib` is the module name on Linux; on Apple platforms the same C API lives
+/// in the SDK's `zlib.h` with no importable module, which is why the Apple path
+/// talks to `Compression.framework` instead.
 public enum Inflate {
     /// Decompresses a raw deflate stream (no zlib header).
     public static func raw(_ data: Data, expectedSize: Int) throws -> Data {
-        #if canImport(zlib)
+        guard !data.isEmpty else { return Data() }
+
+        #if canImport(Compression)
+        return try compressionInflate(data, expectedSize: expectedSize)
+        #elseif canImport(zlib)
         return try zlibInflate(data, expectedSize: expectedSize)
         #else
-        // Without zlib only stored (uncompressed) entries can be read; the ZIP
-        // layer handles those directly and never calls this path.
+        // Without a decompressor only stored (uncompressed) entries can be read;
+        // the ZIP layer handles those directly and never calls this path.
         throw ZipError.unsupportedCompression(8)
         #endif
     }
+}
 
-    #if canImport(zlib)
+#if canImport(Compression)
+extension Inflate {
+    /// Raw DEFLATE via `COMPRESSION_ZLIB`, which on Apple platforms means
+    /// "zlib algorithm, raw stream" — exactly the payload of a ZIP entry with
+    /// compression method 8.
+    private static func compressionInflate(_ data: Data, expectedSize: Int) throws -> Data {
+        let capacity = max(expectedSize, data.count * 4, 1024)
+        var output = Data(count: capacity)
+
+        let written: Int = output.withUnsafeMutableBytes { outBuf in
+            guard let outBase = outBuf.bindMemory(to: UInt8.self).baseAddress else { return 0 }
+            return data.withUnsafeBytes { inBuf -> Int in
+                guard let inBase = inBuf.bindMemory(to: UInt8.self).baseAddress else { return 0 }
+                return compression_decode_buffer(
+                    outBase,
+                    outBuf.count,
+                    inBase,
+                    inBuf.count,
+                    nil,
+                    COMPRESSION_ZLIB
+                )
+            }
+        }
+
+        guard written > 0 else { throw ZipError.truncated }
+        guard written < capacity else {
+            // Buffer was exactly filled: the stream may have been truncated to
+            // fit. Retry once with room to spare so a full-page image is never
+            // silently clipped.
+            return try compressionInflate(data, expectedSize: capacity * 2)
+        }
+        return output.prefix(written)
+    }
+}
+#endif
+
+#if !canImport(Compression) && canImport(zlib)
+extension Inflate {
     private static func zlibInflate(_ data: Data, expectedSize: Int) throws -> Data {
-        guard !data.isEmpty else { return Data() }
         var stream = z_stream()
-        var status = inflateInit2_(&stream, -MAX_WBITS, ZLIB_VERSION, Int32(MemoryLayout<z_stream>.size))
-        guard status == Z_OK else { throw ZipError.truncated }
+        let initStatus = inflateInit2_(
+            &stream,
+            -MAX_WBITS,
+            ZLIB_VERSION,
+            Int32(MemoryLayout<z_stream>.size)
+        )
+        guard initStatus == Z_OK else { throw ZipError.truncated }
         defer { inflateEnd(&stream) }
 
         var output = Data(count: max(expectedSize, 1024))
         var input = [UInt8](data)
+        var status: Int32 = Z_OK
 
         let result: Data? = input.withUnsafeMutableBufferPointer { inBuf in
             output.withUnsafeMutableBytes { outBuf -> Data? in
@@ -41,5 +96,5 @@ public enum Inflate {
         guard let result else { throw ZipError.truncated }
         return result
     }
-    #endif
 }
+#endif

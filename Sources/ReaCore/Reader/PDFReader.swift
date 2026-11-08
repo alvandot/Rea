@@ -1,6 +1,6 @@
 import Foundation
 #if canImport(CoreGraphics)
-import CoreGraphics
+@preconcurrency import CoreGraphics
 #endif
 #if canImport(ImageIO)
 import ImageIO

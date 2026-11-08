@@ -93,6 +93,79 @@ final class ZipArchiveTests: XCTestCase {
         XCTAssertThrowsError(try ZipArchive(data: Data("not a zip".utf8)))
     }
 
+    /// Builds a ZIP whose single entry uses compression method 8 (raw DEFLATE).
+    /// The payload is pre-compressed by the caller because the test target has
+    /// no compressor; `storedPayload` is the expanded bytes.
+    private func makeDeflatedZip(name: String, deflated: Data, uncompressedSize: UInt32) -> Data {
+        let nameBytes = Data(name.utf8)
+        var local = Data()
+
+        local.append(contentsOf: [0x50, 0x4b, 0x03, 0x04])
+        local.append(contentsOf: [20, 0].map { UInt8($0) })
+        local.append(contentsOf: [0, 0].map { UInt8($0) })
+        local.append(contentsOf: [8, 0].map { UInt8($0) })        // method = deflate
+        local.append(contentsOf: [0, 0, 0, 0].map { UInt8($0) })
+        local.append(contentsOf: [0, 0, 0, 0].map { UInt8($0) })  // crc (unchecked)
+        withUnsafeBytes(of: UInt32(deflated.count).littleEndian) { local.append(contentsOf: $0) }
+        withUnsafeBytes(of: uncompressedSize.littleEndian) { local.append(contentsOf: $0) }
+        local.append(contentsOf: [UInt8(nameBytes.count), 0])
+        local.append(contentsOf: [0, 0])
+        local.append(nameBytes)
+        local.append(deflated)
+
+        var central = Data([0x50, 0x4b, 0x01, 0x02])
+        central.append(contentsOf: [20, 0].map { UInt8($0) })
+        central.append(contentsOf: [20, 0].map { UInt8($0) })
+        central.append(contentsOf: [0, 0, 0, 0, 0, 0, 0, 0])
+        central.append(contentsOf: [0, 0, 0, 0].map { UInt8($0) })
+        withUnsafeBytes(of: UInt32(deflated.count).littleEndian) { central.append(contentsOf: $0) }
+        withUnsafeBytes(of: uncompressedSize.littleEndian) { central.append(contentsOf: $0) }
+        central.append(contentsOf: [UInt8(nameBytes.count), 0])
+        central.append(contentsOf: [0, 0, 0, 0, 0, 0, 0, 0])
+        central.append(contentsOf: [0, 0, 0, 0])
+        central.append(nameBytes)
+
+        var eocd = Data([0x50, 0x4b, 0x05, 0x06, 0, 0, 0, 0])
+        withUnsafeBytes(of: UInt16(1).littleEndian) { eocd.append(contentsOf: $0) }
+        withUnsafeBytes(of: UInt16(1).littleEndian) { eocd.append(contentsOf: $0) }
+        withUnsafeBytes(of: UInt32(central.count).littleEndian) { eocd.append(contentsOf: $0) }
+        withUnsafeBytes(of: UInt32(local.count).littleEndian) { eocd.append(contentsOf: $0) }
+        eocd.append(contentsOf: [0, 0])
+
+        return local + central + eocd
+    }
+
+    /// Hand-built fixed-Huffman deflate stream so the test does not depend on
+    /// a compressor being available in the test target.
+    func testInflatesRawDeflateEntry() throws {
+        let original = Data("hello hello hello hello".utf8)
+        let deflated = Data([
+            0xCB, 0x48, 0xCD, 0xC9, 0xC9, 0x57, 0xC8, 0x40, 0x27, 0x01
+        ])
+        let zip = makeDeflatedZip(
+            name: "001.jpg",
+            deflated: deflated,
+            uncompressedSize: UInt32(original.count)
+        )
+
+        let archive = try ZipArchive(data: zip)
+        guard let entry = archive.entries.first else {
+            return XCTFail("no entries parsed")
+        }
+        XCTAssertEqual(entry.compression, 8)
+        XCTAssertEqual(try archive.extract(entry), original)
+    }
+
+    func testInflateRoundTripsWithCompressionApi() throws {
+        // Independent check of Inflate itself against a known deflate stream.
+        let original = Data("hello hello hello hello".utf8)
+        let deflated = Data([
+            0xCB, 0x48, 0xCD, 0xC9, 0xC9, 0x57, 0xC8, 0x40, 0x27, 0x01
+        ])
+        let inflated = try Inflate.raw(deflated, expectedSize: original.count)
+        XCTAssertEqual(inflated, original)
+    }
+
     func testCBZReaderServesPages() throws {
         let payload = Data([0xFF, 0xD8, 0xFF, 0xE0])
         let zip = makeZip(files: [("001.jpg", payload)])

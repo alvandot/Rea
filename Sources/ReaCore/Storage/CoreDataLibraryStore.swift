@@ -143,10 +143,11 @@ public actor CoreDataLibraryStore: LibraryStore {
     // MARK: - Progress
 
     public func progress(for chapterID: UUID) async throws -> ReadingProgress? {
-        try await perform { context in
+        try await perform { context -> ReadingProgress? in
             let request = NSFetchRequest<ProgressEntity>(entityName: "ProgressEntity")
             request.predicate = NSPredicate(format: "chapterID == %@", chapterID as CVarArg)
-            return try context.fetch(request).first.map(Self.toModel)
+            guard let entity = try context.fetch(request).first else { return nil }
+            return Self.toModel(entity)
         }
     }
 
