@@ -112,7 +112,7 @@ public actor MangaDexSource: ContentSource {
         return req
     }
 
-    private func mapSeries(_ manga: MangaEntity) -> Series {
+    private func mapSeries(_ manga: MangaDexMangaDTO) -> Series {
         let title = manga.attributes.title["en"]
             ?? manga.attributes.title.values.first
             ?? "Untitled"
@@ -133,7 +133,7 @@ public actor MangaDexSource: ContentSource {
         )
     }
 
-    private func mapChapter(_ chapter: ChapterEntity, seriesRemoteID: String) -> Chapter? {
+    private func mapChapter(_ chapter: MangaDexChapterDTO, seriesRemoteID: String) -> Chapter? {
         let num = chapter.attributes.chapter.flatMap(Double.init) ?? 0
         return Chapter(
             id: StableID.uuid(sourceID: id, remoteID: chapter.id),
@@ -150,22 +150,22 @@ public actor MangaDexSource: ContentSource {
 // MARK: - DTOs
 
 struct MangaEnvelope: Decodable {
-    let data: MangaEntity?
+    let data: MangaDexMangaDTO?
     let total: Int?
     init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
-        data = try c.decodeIfPresent(MangaEntity.self, forKey: .data)
+        data = try c.decodeIfPresent(MangaDexMangaDTO.self, forKey: .data)
         total = try? c.decode(Int.self, forKey: .total)
     }
     enum CodingKeys: String, CodingKey { case data, total }
 }
 
 struct MangaListEnvelope: Decodable {
-    let data: [MangaEntity]
+    let data: [MangaDexMangaDTO]
     let total: Int
 }
 
-struct MangaEntity: Decodable {
+struct MangaDexMangaDTO: Decodable {
     let id: String
     let attributes: Attributes
     let relationships: [Relationship]
@@ -201,10 +201,10 @@ struct MangaEntity: Decodable {
 }
 
 struct ChapterEnvelope: Decodable {
-    let data: [ChapterEntity]
+    let data: [MangaDexChapterDTO]
 }
 
-struct ChapterEntity: Decodable {
+struct MangaDexChapterDTO: Decodable {
     let id: String
     let attributes: Attributes
 
