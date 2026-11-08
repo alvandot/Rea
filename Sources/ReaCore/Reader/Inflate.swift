@@ -7,9 +7,10 @@ import zlib
 
 /// Raw-DEFLATE decompressor for ZIP entries.
 ///
-/// `zlib` is the module name on Linux; on Apple platforms the same C API lives
-/// in the SDK's `zlib.h` with no importable module, which is why the Apple path
-/// talks to `Compression.framework` instead.
+/// Apple platforms use `Compression.framework`: the Xcode SDK ships `zlib.h`
+/// but no importable `zlib` module, so every `z_stream` symbol is out of scope
+/// there. `COMPRESSION_ZLIB` is raw DEFLATE — exactly the payload of a ZIP
+/// entry with compression method 8. Linux keeps the zlib C API.
 public enum Inflate {
     /// Decompresses a raw deflate stream (no zlib header).
     public static func raw(_ data: Data, expectedSize: Int) throws -> Data {
@@ -29,36 +30,39 @@ public enum Inflate {
 
 #if canImport(Compression)
 extension Inflate {
-    /// Raw DEFLATE via `COMPRESSION_ZLIB`, which on Apple platforms means
-    /// "zlib algorithm, raw stream" — exactly the payload of a ZIP entry with
-    /// compression method 8.
     private static func compressionInflate(_ data: Data, expectedSize: Int) throws -> Data {
-        let capacity = max(expectedSize, data.count * 4, 1024)
-        var output = Data(count: capacity)
+        // `compression_decode_buffer` returns 0 when the output buffer is too
+        // small, so grow the buffer and retry instead of trusting the size
+        // recorded in the ZIP directory.
+        var capacity = max(expectedSize, 1024)
+        for _ in 0..<4 {
+            var output = Data(count: capacity)
 
-        let written: Int = output.withUnsafeMutableBytes { outBuf in
-            guard let outBase = outBuf.bindMemory(to: UInt8.self).baseAddress else { return 0 }
-            return data.withUnsafeBytes { inBuf -> Int in
-                guard let inBase = inBuf.bindMemory(to: UInt8.self).baseAddress else { return 0 }
-                return compression_decode_buffer(
-                    outBase,
-                    outBuf.count,
-                    inBase,
-                    inBuf.count,
-                    nil,
-                    COMPRESSION_ZLIB
-                )
+            let written: Int = output.withUnsafeMutableBytes { outBuf in
+                guard let outBase = outBuf.bindMemory(to: UInt8.self).baseAddress else {
+                    return 0
+                }
+                return data.withUnsafeBytes { inBuf -> Int in
+                    guard let inBase = inBuf.bindMemory(to: UInt8.self).baseAddress else {
+                        return 0
+                    }
+                    return compression_decode_buffer(
+                        outBase,
+                        outBuf.count,
+                        inBase,
+                        inBuf.count,
+                        nil,
+                        COMPRESSION_ZLIB
+                    )
+                }
             }
-        }
 
-        guard written > 0 else { throw ZipError.truncated }
-        guard written < capacity else {
-            // Buffer was exactly filled: the stream may have been truncated to
-            // fit. Retry once with room to spare so a full-page image is never
-            // silently clipped.
-            return try compressionInflate(data, expectedSize: capacity * 2)
+            if written > 0 {
+                return output.prefix(written)
+            }
+            capacity *= 4
         }
-        return output.prefix(written)
+        throw ZipError.truncated
     }
 }
 #endif
@@ -76,25 +80,31 @@ extension Inflate {
         guard initStatus == Z_OK else { throw ZipError.truncated }
         defer { inflateEnd(&stream) }
 
-        var output = Data(count: max(expectedSize, 1024))
+        // Slack beyond the advertised size: inflate still needs room for the
+        // final block marker once the payload fills the buffer exactly.
+        var output = Data(count: max(expectedSize, 1024) + 64)
         var input = [UInt8](data)
         var status: Int32 = Z_OK
+        var written = 0
 
-        let result: Data? = input.withUnsafeMutableBufferPointer { inBuf in
-            output.withUnsafeMutableBytes { outBuf -> Data? in
+        let completed: Bool = input.withUnsafeMutableBufferPointer { inBuf in
+            output.withUnsafeMutableBytes { outBuf -> Bool in
+                guard let outBase = outBuf.bindMemory(to: Bytef.self).baseAddress else {
+                    return false
+                }
                 stream.next_in = inBuf.baseAddress
                 stream.avail_in = uInt(inBuf.count)
-                stream.next_out = outBuf.bindMemory(to: Bytef.self).baseAddress
+                stream.next_out = outBase
                 stream.avail_out = uInt(outBuf.count)
 
                 status = inflate(&stream, Z_FINISH)
-                guard status == Z_STREAM_END else { return nil }
-                let written = outBuf.count - Int(stream.avail_out)
-                return output.prefix(written)
+                guard status == Z_STREAM_END else { return false }
+                written = outBuf.count - Int(stream.avail_out)
+                return true
             }
         }
-        guard let result else { throw ZipError.truncated }
-        return result
+        guard completed else { throw ZipError.truncated }
+        return output.prefix(written)
     }
 }
 #endif

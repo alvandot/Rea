@@ -7,7 +7,9 @@ name: PR Checks
 #   build — xcodegen + unsigned simulator build, which is the first real
 #           compile of the SwiftUI layer
 #
-# iPhone 13 Pro is the pinned simulator for the build smoke test.
+# The smoke build targets the generic simulator destination: named devices
+# depend on which runtimes the runner image ships, and pinning one turns a
+# runtime bump into a spurious red build.
 
 on:
   pull_request:
@@ -21,8 +23,6 @@ concurrency:
 
 env:
   SCHEME: Rea
-  # Xcode 26 no longer ships an iPhone 13 Pro simulator runtime; the
-  # "Pick simulator" step resolves an installed iPhone at run time.
 
 jobs:
   core:
@@ -90,28 +90,6 @@ jobs:
       - name: Generate project
         run: xcodegen generate
 
-      - name: Pick simulator
-        id: sim
-        run: |
-          set -euo pipefail
-          # Prefer an iPhone 13 Pro when the runtime still has one, otherwise
-          # take the newest installed iPhone simulator.
-          PICKED=$(xcrun simctl list devices available --json \
-            | python3 -c '
-          import json, sys
-          data = json.load(sys.stdin)["devices"]
-          names = [d["name"] for runtimes in data.values() for d in runtimes]
-          for preferred in ("iPhone 13 Pro", "iPhone 16 Pro", "iPhone 16", "iPhone 17 Pro"):
-              if preferred in names:
-                  print(preferred); raise SystemExit
-          iphones = sorted(n for n in names if n.startswith("iPhone"))
-          if not iphones:
-              raise SystemExit("no iPhone simulator available")
-          print(iphones[-1])
-          ')
-          echo "Using simulator: $PICKED"
-          echo "name=$PICKED" >> "$GITHUB_OUTPUT"
-
       - name: Build for simulator
         run: |
           set -euo pipefail
@@ -119,7 +97,7 @@ jobs:
             -project Rea.xcodeproj \
             -scheme "$SCHEME" \
             -configuration Debug \
-            -destination "platform=iOS Simulator,name=${{ steps.sim.outputs.name }}" \
+            -destination "generic/platform=iOS Simulator" \
             -derivedDataPath build/DerivedData \
             CODE_SIGNING_ALLOWED=NO \
             CODE_SIGNING_REQUIRED=NO \
