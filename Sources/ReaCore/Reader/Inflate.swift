@@ -25,24 +25,30 @@ public enum Inflate {
         guard status == Z_OK else { throw ZipError.truncated }
         defer { inflateEnd(&stream) }
 
-        var output = Data(count: max(expectedSize, 1024))
+        // Slack beyond the advertised size: inflate still needs room for the
+        // final block marker once the payload fills the buffer exactly.
+        var output = Data(count: max(expectedSize, 1024) + 64)
         var input = [UInt8](data)
+        var written = 0
 
-        let result: Data? = input.withUnsafeMutableBufferPointer { inBuf in
-            output.withUnsafeMutableBytes { outBuf -> Data? in
+        let completed: Bool = input.withUnsafeMutableBufferPointer { inBuf in
+            output.withUnsafeMutableBytes { outBuf -> Bool in
+                guard let outBase = outBuf.bindMemory(to: Bytef.self).baseAddress else {
+                    return false
+                }
                 stream.next_in = inBuf.baseAddress
                 stream.avail_in = uInt(inBuf.count)
-                stream.next_out = outBuf.bindMemory(to: Bytef.self).baseAddress
+                stream.next_out = outBase
                 stream.avail_out = uInt(outBuf.count)
 
                 status = inflate(&stream, Z_FINISH)
-                guard status == Z_STREAM_END else { return nil }
-                let written = outBuf.count - Int(stream.avail_out)
-                return output.prefix(written)
+                guard status == Z_STREAM_END else { return false }
+                written = outBuf.count - Int(stream.avail_out)
+                return true
             }
         }
-        guard let result else { throw ZipError.truncated }
-        return result
+        guard completed else { throw ZipError.truncated }
+        return output.prefix(written)
     }
     #endif
 }
