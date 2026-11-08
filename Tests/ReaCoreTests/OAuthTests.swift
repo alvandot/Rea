@@ -70,7 +70,8 @@ final class OAuthTests: XCTestCase {
         XCTAssertEqual(tokens.accessToken, "a")
         XCTAssertEqual(tokens.refreshToken, "r")
         XCTAssertFalse(tokens.isExpired)
-        XCTAssertEqual(tokens.expiresAt?.timeIntervalSince(now), 60, accuracy: 0.5)
+        let expiresIn = try XCTUnwrap(tokens.expiresAt).timeIntervalSince(now)
+        XCTAssertEqual(expiresIn, 60, accuracy: 0.5)
     }
 
     func testPKCEChallengeIsDeterministic() {
