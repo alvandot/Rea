@@ -64,7 +64,16 @@ jobs:
       - name: Run core tests
         run: |
           set -euo pipefail
-          swift test --parallel | tee swift-test.log
+          # `--verbose` keeps per-file compile lines; without `| tee` under
+          # pipefail the exit code is preserved and the log stays on stdout.
+          swift test --parallel 2>&1 | tee swift-test.log
+
+      - name: Show compiler diagnostics
+        if: failure()
+        run: |
+          echo "::group::All errors and notes from swift-test.log"
+          grep -nE 'error:|warning:|note: ' swift-test.log || echo "(no diagnostics found)"
+          echo "::endgroup::"
 
       - name: Generate Xcode project
         run: |
@@ -187,6 +196,15 @@ jobs:
           path: ${{ runner.temp }}/Rea-unsigned.zip
           if-no-files-found: error
           retention-days: 14
+
+      - name: Upload test log
+        if: always()
+        uses: actions/upload-artifact@v6
+        with:
+          name: swift-test-log-${{ github.run_number }}
+          path: swift-test.log
+          if-no-files-found: ignore
+          retention-days: 7
 
       - name: Upload logs on failure
         if: failure()

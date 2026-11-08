@@ -49,7 +49,14 @@ jobs:
       - name: swift test
         run: |
           set -euo pipefail
-          swift test --parallel | tee swift-test.log
+          swift test --parallel 2>&1 | tee swift-test.log
+
+      - name: Compiler diagnostics
+        if: failure()
+        run: |
+          echo "::group::errors and notes"
+          grep -nE 'error:|warning:|note: ' swift-test.log || echo "(no diagnostics found)"
+          echo "::endgroup::"
 
       - name: Upload test log on failure
         if: failure()
@@ -94,7 +101,14 @@ jobs:
             CODE_SIGNING_ALLOWED=NO \
             CODE_SIGNING_REQUIRED=NO \
             build \
-            | tee xcodebuild.log
+            2>&1 | tee xcodebuild.log
+
+      - name: Compiler diagnostics
+        if: failure()
+        run: |
+          echo "::group::errors and notes"
+          grep -nE 'error:|warning:|note: ' xcodebuild.log || echo "(no diagnostics found)"
+          echo "::endgroup::"
 
       - name: Upload build log on failure
         if: failure()
