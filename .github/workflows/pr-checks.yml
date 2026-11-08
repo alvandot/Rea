@@ -7,7 +7,9 @@ name: PR Checks
 #   build — xcodegen + unsigned simulator build, which is the first real
 #           compile of the SwiftUI layer
 #
-# iPhone 13 Pro is the pinned simulator for the build smoke test.
+# The smoke build targets the generic simulator destination: named devices
+# depend on which runtimes the runner image ships, and pinning one turns a
+# runtime bump into a spurious red build.
 
 on:
   pull_request:
@@ -21,7 +23,6 @@ concurrency:
 
 env:
   SCHEME: Rea
-  SIM_DEVICE: iPhone 13 Pro
 
 jobs:
   core:
@@ -96,7 +97,7 @@ jobs:
             -project Rea.xcodeproj \
             -scheme "$SCHEME" \
             -configuration Debug \
-            -destination "platform=iOS Simulator,name=$SIM_DEVICE" \
+            -destination "generic/platform=iOS Simulator" \
             -derivedDataPath build/DerivedData \
             CODE_SIGNING_ALLOWED=NO \
             CODE_SIGNING_REQUIRED=NO \
